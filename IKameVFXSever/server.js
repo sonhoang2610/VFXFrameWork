@@ -97,6 +97,9 @@ if (googleClientId && googleClientSecret) {
 // Serve VFXHub frontend (sibling directory)
 app.use(express.static(path.join(__dirname, '..', 'VFXHub')));
 
+// Serve WebGL viewer build
+app.use('/webgl', express.static(path.join(__dirname, 'webgl-build')));
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.use('/api/vfx', vfxRoutes);

@@ -27,6 +27,7 @@ const upload = multer({
 const singleUploadFields = upload.fields([
   { name: 'package', maxCount: 1 },
   { name: 'thumbnail', maxCount: 1 },
+  { name: 'bundle', maxCount: 1 }, // optional AssetBundle for WebGL preview
 ]);
 
 // Field configuration for batch upload (multiple packages)
@@ -86,6 +87,15 @@ router.post('/upload', singleUploadFields, async (req, res) => {
     thumbnailRelPath = path.join(category, name, thumbnailFilename).replace(/\\/g, '/');
   }
 
+  // Save AssetBundle if provided
+  let bundleRelPath = null;
+  if (req.files['bundle'] && req.files['bundle'][0]) {
+    const bundleBuffer = req.files['bundle'][0].buffer;
+    const bundleFileName = 'bundle.assetbundle';
+    await storage.saveFile(path.join(packageDir, bundleFileName), bundleBuffer);
+    bundleRelPath = path.join(category, name, bundleFileName).replace(/\\/g, '/');
+  }
+
   // Save meta.json
   const metaJson = {
     id,
@@ -111,6 +121,7 @@ router.post('/upload', singleUploadFields, async (req, res) => {
     uploadedAt: metaJson.uploadedAt,
     fileSize,
     thumbnailPath: thumbnailRelPath,
+    bundlePath: bundleRelPath,
     packagePath: path.join(category, name, 'package.zip').replace(/\\/g, '/'),
     dependencies: dependencies || [],
     particleCount: particleCount || 0,
@@ -179,6 +190,7 @@ router.post('/upload-batch', batchUploadFields, async (req, res) => {
     }
 
     const thumbnailFile = filesByField[`thumbnail_${i}`] || null;
+    const bundleFile = filesByField[`bundle_${i}`] || null;
 
     try {
       const id = generateId(category, name);
@@ -194,6 +206,14 @@ router.post('/upload-batch', batchUploadFields, async (req, res) => {
         const thumbnailFilename = `thumbnail${ext}`;
         await storage.saveFile(path.join(packageDir, thumbnailFilename), thumbnailFile.buffer);
         thumbnailRelPath = path.join(category, name, thumbnailFilename).replace(/\\/g, '/');
+      }
+
+      // Save AssetBundle if provided
+      let bundleRelPath = null;
+      if (bundleFile) {
+        const bundleFileName = 'bundle.assetbundle';
+        await storage.saveFile(path.join(packageDir, bundleFileName), bundleFile.buffer);
+        bundleRelPath = path.join(category, name, bundleFileName).replace(/\\/g, '/');
       }
 
       // Save meta.json
@@ -220,6 +240,7 @@ router.post('/upload-batch', batchUploadFields, async (req, res) => {
         uploadedAt: metaJson.uploadedAt,
         fileSize: packageFile.buffer.length,
         thumbnailPath: thumbnailRelPath,
+        bundlePath: bundleRelPath,
         packagePath: path.join(category, name, 'package.zip').replace(/\\/g, '/'),
         dependencies: dependencies || [],
         particleCount: particleCount || 0,
@@ -341,6 +362,27 @@ router.get('/:id/thumbnail', async (req, res) => {
 
   const stream = fs.createReadStream(filePath);
   stream.pipe(res);
+});
+
+/**
+ * GET /api/vfx/:id/bundle
+ * Download the AssetBundle for WebGL preview.
+ */
+router.get('/:id/bundle', async (req, res) => {
+  const item = await catalog.findItem(req.params.id);
+  if (!item || !item.bundlePath) {
+    return res.status(404).json({ error: 'Bundle not found' });
+  }
+
+  const bundleFile = path.join(storage.getStorageRoot(), item.bundlePath);
+  const exists = await storage.fileExists(bundleFile);
+  if (!exists) {
+    return res.status(404).json({ error: 'Bundle file not found on disk' });
+  }
+
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Access-Control-Allow-Origin', '*');
+  res.sendFile(path.resolve(bundleFile));
 });
 
 /**
