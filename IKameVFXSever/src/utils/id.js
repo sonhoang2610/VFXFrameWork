@@ -19,6 +19,7 @@ function generateId(category, name) {
   return raw
     .toLowerCase()
     .replace(/[\s/\\]+/g, '-')   // Replace slashes, backslashes, whitespace with hyphens
+    .replace(/[_]+/g, '-')       // Replace underscores with hyphens
     .replace(/[^a-z0-9-]/g, '')  // Strip anything that isn't alphanumeric or hyphen
     .replace(/-+/g, '-')         // Collapse multiple consecutive hyphens
     .replace(/^-|-$/g, '');      // Trim leading/trailing hyphens
