@@ -11,6 +11,7 @@ const multer = require('multer');
 const { generateId } = require('../utils/id');
 const catalog = require('../services/catalog');
 const storage = require('../services/storage');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -294,7 +295,7 @@ router.get('/categories', async (req, res) => {
  * GET /api/vfx/:id/download
  * Download the VFX zip package.
  */
-router.get('/:id/download', async (req, res) => {
+router.get('/:id/download', authenticate, async (req, res) => {
   const item = await catalog.findItem(req.params.id);
   if (!item) {
     return res.status(404).json({ error: 'VFX package not found' });
@@ -346,7 +347,7 @@ router.get('/:id/thumbnail', async (req, res) => {
  * DELETE /api/vfx/:id
  * Delete a VFX package and its files.
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   const removed = await catalog.removeItem(req.params.id);
   if (!removed) {
     return res.status(404).json({ error: 'VFX package not found' });

@@ -3,6 +3,7 @@
  *
  * Express server for managing VFX asset packages.
  * Provides upload, catalog, download, and deletion of VFX packages.
+ * Authenticates users via Google OAuth (company accounts).
  */
 
 require('dotenv').config();
@@ -10,6 +11,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const session = require('express-session');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const { ensureDir } = require('./src/services/storage');
 
 const vfxRoutes = require('./src/routes/vfx');
@@ -29,13 +33,76 @@ app.use(express.json());
 // Parse URL-encoded request bodies
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from public/ directory (for web frontend later)
+// Session middleware (required by passport for OAuth handshake)
+app.use(
+  session({
+    secret: process.env.JWT_SECRET || 'ikame-vfx-hub-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false }, // Set to true if behind HTTPS reverse proxy
+  })
+);
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+// ── Passport Configuration ─────────────────────────────────────────────────
+
+// Serialize/deserialize user for session (minimal — we use JWT, not sessions)
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
+
+// Configure Google OAuth 2.0 strategy
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+if (googleClientId && googleClientSecret) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: googleClientId,
+        clientSecret: googleClientSecret,
+        callbackURL: '/auth/google/callback',
+      },
+      (accessToken, refreshToken, profile, done) => {
+        // Extract user info from Google profile
+        const user = {
+          name: profile.displayName,
+          email:
+            profile.emails && profile.emails.length > 0
+              ? profile.emails[0].value
+              : '',
+          picture:
+            profile.photos && profile.photos.length > 0
+              ? profile.photos[0].value
+              : '',
+        };
+        done(null, user);
+      }
+    )
+  );
+  console.log('Google OAuth strategy configured.');
+} else {
+  console.warn(
+    'WARNING: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Google OAuth login will not work.'
+  );
+}
+
+// Serve static files from public/ directory (web frontend)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.use('/api/vfx', vfxRoutes);
-app.use('/api/auth', authRoutes);
+
+// Auth routes are mounted at /auth (not /api/auth) so the OAuth redirect URLs are clean
+app.use('/auth', authRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
