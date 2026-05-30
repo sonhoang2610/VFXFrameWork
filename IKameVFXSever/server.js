@@ -94,8 +94,8 @@ if (googleClientId && googleClientSecret) {
   );
 }
 
-// Serve static files from public/ directory (web frontend)
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve VFXHub frontend (sibling directory)
+app.use(express.static(path.join(__dirname, '..', 'VFXHub')));
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
@@ -111,6 +111,11 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
+});
+
+// Serve VFXHub HTML for root and non-API/non-auth routes (SPA fallback)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'VFXHub', 'VFX Hub.html'));
 });
 
 // ── Error Handling ──────────────────────────────────────────────────────────
@@ -145,7 +150,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`IKAME VFX Hub Server listening on port ${PORT}`);
     console.log(`Storage path: ${storagePath}`);
-    console.log(`Static files: ${path.join(__dirname, 'public')}`);
+    console.log(`Static files: ${path.join(__dirname, '..', 'VFXHub')}`);
   });
 }
 
