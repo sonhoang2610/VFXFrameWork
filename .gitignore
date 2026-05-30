@@ -1,0 +1,11 @@
+﻿# Unity project has its own git
+IKAME_VFX/
+
+# Node modules
+node_modules/
+
+# Storage (VFX packages)
+IKameVFXSever/storage/
+
+# Environment
+.env
