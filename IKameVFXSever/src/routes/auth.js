@@ -85,6 +85,22 @@ router.get('/me', authenticate, (req, res) => {
 });
 
 /**
+ * POST /auth/admin
+ * Verify admin password. Returns a short-lived admin JWT.
+ */
+router.post('/admin', (req, res) => {
+  const { password } = req.body;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (!adminPassword || password !== adminPassword) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+
+  const token = jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '2h' });
+  res.json({ token });
+});
+
+/**
  * POST /auth/logout
  * Clear session. Frontend should also remove the token from localStorage.
  */

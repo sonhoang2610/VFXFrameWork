@@ -94,4 +94,21 @@ function optionalAuth(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, optionalAuth };
+function authenticateAdmin(req, res, next) {
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Admin authentication required.' });
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required.' });
+    }
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired admin token.' });
+  }
+}
+
+module.exports = { authenticate, optionalAuth, authenticateAdmin };

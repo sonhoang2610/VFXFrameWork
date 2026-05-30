@@ -11,7 +11,7 @@ const multer = require('multer');
 const { generateId } = require('../utils/id');
 const catalog = require('../services/catalog');
 const storage = require('../services/storage');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authenticateAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -403,6 +403,106 @@ router.delete('/:id', authenticate, async (req, res) => {
     message: 'VFX package deleted successfully',
     id: removed.id,
   });
+});
+
+/**
+ * PATCH /api/vfx/:id
+ * Update VFX item metadata (admin only).
+ * Body: { name, category, featured }
+ */
+router.patch('/:id', authenticateAdmin, async (req, res) => {
+  const { name, category, featured } = req.body;
+  const data = await catalog.readCatalog();
+  const item = data.items.find(i => i.id === req.params.id);
+  if (!item) {
+    return res.status(404).json({ error: 'VFX package not found' });
+  }
+
+  if (name !== undefined) item.name = name;
+  if (category !== undefined) item.category = category;
+  if (featured !== undefined) item.featured = !!featured;
+
+  data.categories = [...new Set(data.items.map(i => i.category))].sort();
+  data.lastUpdated = new Date().toISOString();
+  await catalog.writeCatalog(data);
+
+  res.json({ message: 'Updated', item });
+});
+
+/**
+ * DELETE /api/vfx/admin/by-category/:category
+ * Delete all VFX in a category (admin only). Category is URL-encoded.
+ */
+router.delete('/admin/by-category/:category', authenticateAdmin, async (req, res) => {
+  const cat = decodeURIComponent(req.params.category);
+  const data = await catalog.readCatalog();
+  const toRemove = data.items.filter(i => i.category === cat || i.category.startsWith(cat + '/'));
+
+  if (toRemove.length === 0) {
+    return res.status(404).json({ error: 'No items found in category: ' + cat });
+  }
+
+  for (const item of toRemove) {
+    const dir = storage.getPackageDir(item.category, item.name);
+    await storage.deletePackageDir(dir);
+  }
+
+  const removeIds = new Set(toRemove.map(i => i.id));
+  data.items = data.items.filter(i => !removeIds.has(i.id));
+  data.categories = [...new Set(data.items.map(i => i.category))].sort();
+  data.lastUpdated = new Date().toISOString();
+  await catalog.writeCatalog(data);
+
+  res.json({ message: 'Deleted ' + toRemove.length + ' items from ' + cat, count: toRemove.length });
+});
+
+/**
+ * DELETE /api/vfx/admin/all
+ * Delete ALL VFX packages (admin only).
+ */
+router.delete('/admin/all', authenticateAdmin, async (req, res) => {
+  const data = await catalog.readCatalog();
+  const count = data.items.length;
+
+  for (const item of data.items) {
+    const dir = storage.getPackageDir(item.category, item.name);
+    await storage.deletePackageDir(dir);
+  }
+
+  data.items = [];
+  data.categories = [];
+  data.lastUpdated = new Date().toISOString();
+  await catalog.writeCatalog(data);
+
+  res.json({ message: 'Deleted all ' + count + ' items', count });
+});
+
+/**
+ * POST /api/vfx/admin/bulk-delete
+ * Delete multiple VFX by IDs (admin only).
+ * Body: { ids: ["id1", "id2", ...] }
+ */
+router.post('/admin/bulk-delete', authenticateAdmin, async (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array is required' });
+  }
+
+  const data = await catalog.readCatalog();
+  const idSet = new Set(ids);
+  const toRemove = data.items.filter(i => idSet.has(i.id));
+
+  for (const item of toRemove) {
+    const dir = storage.getPackageDir(item.category, item.name);
+    await storage.deletePackageDir(dir);
+  }
+
+  data.items = data.items.filter(i => !idSet.has(i.id));
+  data.categories = [...new Set(data.items.map(i => i.category))].sort();
+  data.lastUpdated = new Date().toISOString();
+  await catalog.writeCatalog(data);
+
+  res.json({ message: 'Deleted ' + toRemove.length + ' items', count: toRemove.length });
 });
 
 module.exports = router;
