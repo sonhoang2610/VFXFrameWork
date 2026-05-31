@@ -7,7 +7,9 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { createReadStream } = require('fs');
 const multer = require('multer');
+const { Readable } = require('stream');
 const { generateId } = require('../utils/id');
 const catalog = require('../services/catalog');
 const storage = require('../services/storage');
@@ -383,6 +385,74 @@ router.get('/:id/bundle', async (req, res) => {
   res.set('Content-Type', 'application/octet-stream');
   res.set('Access-Control-Allow-Origin', '*');
   res.sendFile(path.resolve(bundleFile));
+});
+
+/**
+ * GET /api/vfx/:id/particle-json
+ * Extract and serve the particle.json from the package zip.
+ */
+router.get('/:id/particle-json', async (req, res) => {
+  const item = await catalog.findItem(req.params.id);
+  if (!item) return res.status(404).json({ error: 'VFX package not found' });
+
+  const zipPath = path.join(storage.getStorageRoot(), item.packagePath);
+  if (!await storage.fileExists(zipPath)) return res.status(404).json({ error: 'Package zip not found' });
+
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+    var jsonEntry = null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].entryName.endsWith('.particle.json')) {
+        jsonEntry = entries[i];
+        break;
+      }
+    }
+    if (!jsonEntry) return res.status(404).json({ error: 'No particle.json found in package' });
+
+    res.set('Content-Type', 'application/json');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.send(jsonEntry.getData());
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read zip: ' + err.message });
+  }
+});
+
+/**
+ * GET /api/vfx/:id/texture/:filename
+ * Extract and serve a texture file from the package zip.
+ */
+router.get('/:id/texture/:filename', async (req, res) => {
+  const item = await catalog.findItem(req.params.id);
+  if (!item) return res.status(404).json({ error: 'VFX package not found' });
+
+  const zipPath = path.join(storage.getStorageRoot(), item.packagePath);
+  if (!await storage.fileExists(zipPath)) return res.status(404).json({ error: 'Package zip not found' });
+
+  var target = req.params.filename;
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+    var texEntry = null;
+    for (var i = 0; i < entries.length; i++) {
+      var name = entries[i].entryName.split('/').pop();
+      if (name === target) {
+        texEntry = entries[i];
+        break;
+      }
+    }
+    if (!texEntry) return res.status(404).json({ error: 'Texture not found in package: ' + target });
+
+    var ext = path.extname(target).toLowerCase();
+    var contentType = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream';
+    res.set('Content-Type', contentType);
+    res.set('Access-Control-Allow-Origin', '*');
+    res.send(texEntry.getData());
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read zip: ' + err.message });
+  }
 });
 
 /**

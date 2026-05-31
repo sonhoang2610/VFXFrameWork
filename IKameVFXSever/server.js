@@ -103,6 +103,10 @@ app.use('/webgl', express.static(path.join(__dirname, 'webgl-build')));
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.use('/api/vfx', vfxRoutes);
+app.use('/api/meshes', require('./src/routes/meshes'));
+app.use('/api/shaders', require('./src/routes/shaders'));
+app.use('/api/materials', require('./src/routes/materials'));
+app.use('/api/textures', require('./src/routes/textures'));
 
 // Auth routes are mounted at /auth (not /api/auth) so the OAuth redirect URLs are clean
 app.use('/auth', authRoutes);
