@@ -103,6 +103,9 @@ app.use('/webgl', express.static(path.join(__dirname, 'webgl-build')));
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.use('/api/vfx', vfxRoutes);
+app.use('/api/assets', require('./src/routes/assets'));
+
+// Legacy routes — kept for backward compatibility
 app.use('/api/meshes', require('./src/routes/meshes'));
 app.use('/api/shaders', require('./src/routes/shaders'));
 app.use('/api/materials', require('./src/routes/materials'));
