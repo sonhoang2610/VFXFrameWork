@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
     var files = await fs.readdir(dir);
     var shaders = files
       .filter(function (f) { return f.endsWith('.shader'); })
-      .map(function (f) { return f.replace('.shader', ''); });
+      .map(function (f) { var id = f.replace('.shader', ''); return { id: id, name: id.replace(/__/g, '/') }; });
     res.json({ shaders: shaders });
   } catch (err) {
     res.json({ shaders: [] });
@@ -79,11 +79,7 @@ router.post('/', async (req, res) => {
 
   var filePath = path.join(dir, id + '.shader');
 
-  // Skip if already exists (same shader)
-  try {
-    await fs.access(filePath);
-    return res.json({ message: 'Shader already exists', id: id });
-  } catch {}
+  // Always overwrite — upsert behavior
 
   await fs.writeFile(filePath, data.content, 'utf-8');
   res.json({ message: 'Shader saved', id: id });
@@ -100,6 +96,12 @@ router.head('/:id', async (req, res) => {
   } catch {
     res.status(404).end();
   }
+});
+
+router.delete('/:id', async (req, res) => {
+  var filePath = path.join(getShaderDir(), req.params.id + '.shader');
+  try { await fs.unlink(filePath); res.json({ message: 'Deleted', id: req.params.id }); }
+  catch { res.status(404).json({ error: 'Shader not found' }); }
 });
 
 module.exports = router;

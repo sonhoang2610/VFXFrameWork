@@ -52,9 +52,17 @@ router.get('/', async (req, res) => {
   try {
     await ensureDir(dir);
     var files = await fs.readdir(dir);
-    var textures = files
-      .filter(function (f) { return f.endsWith('.meta.json'); })
-      .map(function (f) { return f.replace('.meta.json', ''); });
+    var textures = [];
+    for (var i = 0; i < files.length; i++) {
+      if (!files[i].endsWith('.meta.json')) continue;
+      var id = files[i].replace('.meta.json', '');
+      try {
+        var content = JSON.parse(await fs.readFile(path.join(dir, files[i]), 'utf-8'));
+        textures.push({ id: id, name: content.name || id, width: content.width || 0, height: content.height || 0 });
+      } catch (e) {
+        textures.push({ id: id, name: id });
+      }
+    }
     res.json({ textures: textures });
   } catch (err) {
     res.json({ textures: [] });
@@ -141,11 +149,7 @@ router.post('/', upload.single('file'), async (req, res) => {
   var filePath = path.join(dir, id + ext);
   var metaPath = path.join(dir, id + '.meta.json');
 
-  // Skip if already exists (same texture content)
-  try {
-    await fs.access(filePath);
-    return res.json({ message: 'Texture already exists', id: id });
-  } catch {}
+  // Always overwrite — upsert behavior
 
   // Save the image file
   await fs.writeFile(filePath, req.file.buffer);
@@ -176,6 +180,24 @@ router.head('/:id', async (req, res) => {
     res.status(200).end();
   } catch {
     res.status(404).end();
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  var dir = getTextureDir();
+  var metaPath = path.join(dir, req.params.id + '.meta.json');
+  try {
+    var metaRaw = await fs.readFile(metaPath, 'utf-8');
+    var meta = JSON.parse(metaRaw);
+    // Delete image file
+    if (meta.fileName) {
+      try { await fs.unlink(path.join(dir, meta.fileName)); } catch {}
+    }
+    // Delete meta
+    await fs.unlink(metaPath);
+    res.json({ message: 'Deleted', id: req.params.id });
+  } catch {
+    res.status(404).json({ error: 'Texture not found' });
   }
 });
 

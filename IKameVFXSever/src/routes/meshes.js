@@ -24,9 +24,17 @@ router.get('/', async (req, res) => {
   try {
     await ensureDir(dir);
     var files = await fs.readdir(dir);
-    var meshes = files
-      .filter(function (f) { return f.endsWith('.json'); })
-      .map(function (f) { return f.replace('.json', ''); });
+    var meshes = [];
+    for (var i = 0; i < files.length; i++) {
+      if (!files[i].endsWith('.json')) continue;
+      var id = files[i].replace('.json', '');
+      try {
+        var content = JSON.parse(await fs.readFile(path.join(dir, files[i]), 'utf-8'));
+        meshes.push({ id: id, name: content.name || id });
+      } catch (e) {
+        meshes.push({ id: id, name: id });
+      }
+    }
     res.json({ meshes: meshes });
   } catch (err) {
     res.json({ meshes: [] });
@@ -73,12 +81,7 @@ router.post('/', async (req, res) => {
 
   var filePath = path.join(dir, id + '.json');
 
-  // Skip if already exists (same geometry)
-  try {
-    await fs.access(filePath);
-    return res.json({ message: 'Mesh already exists', id: id });
-  } catch {}
-
+  // Always overwrite — upsert behavior
   data.id = id;
   await fs.writeFile(filePath, JSON.stringify(data), 'utf-8');
   res.json({ message: 'Mesh saved', id: id });
@@ -94,6 +97,19 @@ router.head('/:id', async (req, res) => {
     res.status(200).end();
   } catch {
     res.status(404).end();
+  }
+});
+
+/**
+ * DELETE /api/meshes/:id
+ */
+router.delete('/:id', async (req, res) => {
+  var filePath = path.join(getMeshDir(), req.params.id + '.json');
+  try {
+    await fs.unlink(filePath);
+    res.json({ message: 'Deleted', id: req.params.id });
+  } catch {
+    res.status(404).json({ error: 'Mesh not found' });
   }
 });
 

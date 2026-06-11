@@ -26,9 +26,17 @@ router.get('/', async (req, res) => {
   try {
     await ensureDir(dir);
     var files = await fs.readdir(dir);
-    var materials = files
-      .filter(function (f) { return f.endsWith('.json'); })
-      .map(function (f) { return f.replace('.json', ''); });
+    var materials = [];
+    for (var i = 0; i < files.length; i++) {
+      if (!files[i].endsWith('.json')) continue;
+      var id = files[i].replace('.json', '');
+      try {
+        var content = JSON.parse(await fs.readFile(path.join(dir, files[i]), 'utf-8'));
+        materials.push({ id: id, name: content.name || id, shaderName: content.shaderName || '' });
+      } catch (e) {
+        materials.push({ id: id, name: id, shaderName: '' });
+      }
+    }
     res.json({ materials: materials });
   } catch (err) {
     res.json({ materials: [] });
@@ -74,11 +82,7 @@ router.post('/', async (req, res) => {
 
   var filePath = path.join(dir, id + '.json');
 
-  // Skip if already exists (same material)
-  try {
-    await fs.access(filePath);
-    return res.json({ message: 'Material already exists', id: id });
-  } catch {}
+  // Always overwrite — upsert behavior
 
   data.id = id;
   await fs.writeFile(filePath, JSON.stringify(data), 'utf-8');
@@ -96,6 +100,12 @@ router.head('/:id', async (req, res) => {
   } catch {
     res.status(404).end();
   }
+});
+
+router.delete('/:id', async (req, res) => {
+  var filePath = path.join(getMaterialDir(), req.params.id + '.json');
+  try { await fs.unlink(filePath); res.json({ message: 'Deleted', id: req.params.id }); }
+  catch { res.status(404).json({ error: 'Material not found' }); }
 });
 
 module.exports = router;

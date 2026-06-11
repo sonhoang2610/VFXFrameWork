@@ -27,9 +27,9 @@ const upload = multer({
 
 // Field configuration for single package upload
 const singleUploadFields = upload.fields([
-  { name: 'package', maxCount: 1 },
+  { name: 'package', maxCount: 1 },     // optional zip (legacy)
   { name: 'thumbnail', maxCount: 1 },
-  { name: 'bundle', maxCount: 1 }, // optional AssetBundle for WebGL preview
+  { name: 'bundle', maxCount: 1 },      // optional AssetBundle
 ]);
 
 // Field configuration for batch upload (multiple packages)
@@ -65,26 +65,36 @@ router.post('/upload', singleUploadFields, async (req, res) => {
     return res.status(400).json({ error: 'Metadata must include name and category' });
   }
 
-  if (!req.files || !req.files.package || !req.files.package[0]) {
-    return res.status(400).json({ error: 'Missing package file' });
-  }
-
-  const packageFile = req.files.package[0];
-  const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
+  const packageFile = (req.files && req.files.package && req.files.package[0]) ? req.files.package[0] : null;
+  const thumbnailFile = (req.files && req.files.thumbnail) ? req.files.thumbnail[0] : null;
 
   const id = generateId(category, name);
   const packageDir = storage.getPackageDir(category, name);
 
-  // Save package zip
-  const packagePath = path.join(packageDir, 'package.zip');
-  await storage.saveFile(packagePath, packageFile.buffer);
+  // Save package zip (optional — new flow uploads assets separately)
+  if (packageFile) {
+    const packagePath = path.join(packageDir, 'package.zip');
+    await storage.saveFile(packagePath, packageFile.buffer);
+  }
 
-  // Save thumbnail if provided
+  // Save particleJson if provided (new flow)
+  if (req.body.particleJson) {
+    const jsonPath = path.join(packageDir, name + '.particle.json');
+    await storage.saveFile(jsonPath, Buffer.from(req.body.particleJson, 'utf-8'));
+  }
+
+  // Save thumbnail if provided — remove old thumbnail with different ext first
   let thumbnailRelPath = null;
   if (thumbnailFile) {
+    console.log('[VFX Upload] thumbnail originalname:', thumbnailFile.originalname, 'mimetype:', thumbnailFile.mimetype, 'size:', thumbnailFile.size);
     const ext = path.extname(thumbnailFile.originalname) || '.gif';
     const thumbnailFilename = `thumbnail${ext}`;
     const thumbnailAbsPath = path.join(packageDir, thumbnailFilename);
+    for (const oldExt of ['.gif', '.webm', '.png']) {
+      if (oldExt === ext) continue;
+      const oldPath = path.join(packageDir, `thumbnail${oldExt}`);
+      try { await fs.promises.unlink(oldPath); } catch {}
+    }
     await storage.saveFile(thumbnailAbsPath, thumbnailFile.buffer);
     thumbnailRelPath = path.join(category, name, thumbnailFilename).replace(/\\/g, '/');
   }
@@ -114,7 +124,7 @@ router.post('/upload', singleUploadFields, async (req, res) => {
   );
 
   // Build catalog item
-  const fileSize = packageFile.buffer.length;
+  const fileSize = packageFile ? packageFile.buffer.length : (req.body.particleJson ? req.body.particleJson.length : 0);
   const catalogItem = {
     id,
     name,
@@ -124,7 +134,7 @@ router.post('/upload', singleUploadFields, async (req, res) => {
     fileSize,
     thumbnailPath: thumbnailRelPath,
     bundlePath: bundleRelPath,
-    packagePath: path.join(category, name, 'package.zip').replace(/\\/g, '/'),
+    packagePath: packageFile ? path.join(category, name, 'package.zip').replace(/\\/g, '/') : null,
     dependencies: dependencies || [],
     particleCount: particleCount || 0,
   };
@@ -201,11 +211,16 @@ router.post('/upload-batch', batchUploadFields, async (req, res) => {
       // Save package zip
       await storage.saveFile(path.join(packageDir, 'package.zip'), packageFile.buffer);
 
-      // Save thumbnail if provided
+      // Save thumbnail if provided — remove old thumbnail with different ext first
       let thumbnailRelPath = null;
       if (thumbnailFile) {
         const ext = path.extname(thumbnailFile.originalname) || '.gif';
         const thumbnailFilename = `thumbnail${ext}`;
+        for (const oldExt of ['.gif', '.webm', '.png']) {
+          if (oldExt === ext) continue;
+          const oldPath = path.join(packageDir, `thumbnail${oldExt}`);
+          try { await fs.promises.unlink(oldPath); } catch {}
+        }
         await storage.saveFile(path.join(packageDir, thumbnailFilename), thumbnailFile.buffer);
         thumbnailRelPath = path.join(category, name, thumbnailFilename).replace(/\\/g, '/');
       }
@@ -318,24 +333,102 @@ router.get('/categories', async (req, res) => {
  * GET /api/vfx/:id/download
  * Download the VFX zip package.
  */
-router.get('/:id/download', authenticate, async (req, res) => {
+router.get('/:id/download', async (req, res) => {
   const item = await catalog.findItem(req.params.id);
   if (!item) {
     return res.status(404).json({ error: 'VFX package not found' });
   }
 
-  const filePath = path.join(storage.getStorageRoot(), item.packagePath);
-  const exists = await storage.fileExists(filePath);
-  if (!exists) {
-    return res.status(404).json({ error: 'Package file not found on disk' });
+  // Legacy: serve existing zip if available
+  if (item.packagePath) {
+    const filePath = path.join(storage.getStorageRoot(), item.packagePath);
+    if (await storage.fileExists(filePath)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="' + item.name + '.zip"');
+      res.setHeader('Content-Type', 'application/zip');
+      return fs.createReadStream(filePath).pipe(res);
+    }
   }
 
-  const filename = `${item.name}.zip`;
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', 'application/zip');
+  // New flow: build zip on-the-fly from particle.json + assets
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    const packageDir = storage.getPackageDir(item.category, item.name);
+    const assetsDir = path.join(storage.getStorageRoot(), 'assets');
 
-  const stream = fs.createReadStream(filePath);
-  stream.pipe(res);
+    // Add particle.json
+    var dirFiles = await fs.promises.readdir(packageDir).catch(function() { return []; });
+    for (var i = 0; i < dirFiles.length; i++) {
+      if (dirFiles[i].endsWith('.particle.json')) {
+        zip.addLocalFile(path.join(packageDir, dirFiles[i]));
+        break;
+      }
+    }
+
+    // Add thumbnail
+    for (var j = 0; j < dirFiles.length; j++) {
+      if (dirFiles[j].startsWith('thumbnail')) {
+        zip.addLocalFile(path.join(packageDir, dirFiles[j]));
+        break;
+      }
+    }
+
+    // Read particle.json to find referenced asset GUIDs
+    var particleJson = null;
+    for (var k = 0; k < dirFiles.length; k++) {
+      if (dirFiles[k].endsWith('.particle.json')) {
+        particleJson = JSON.parse(await fs.promises.readFile(path.join(packageDir, dirFiles[k]), 'utf-8'));
+        break;
+      }
+    }
+
+    if (particleJson) {
+      // Collect all GUIDs from textures section
+      var guids = new Set();
+      if (particleJson.textures) {
+        Object.keys(particleJson.textures).forEach(function(g) { guids.add(g); });
+      }
+      // Collect materialId, meshId from nodes
+      function collectGuids(node) {
+        if (!node) return;
+        var ps = node.particleSystem;
+        if (ps) {
+          if (ps.materialId) guids.add(ps.materialId);
+          if (ps.mainTexture) guids.add(ps.mainTexture);
+          var rd = ps.rendererModule;
+          if (rd && rd.meshId) guids.add(rd.meshId);
+        }
+        if (node.children) node.children.forEach(collectGuids);
+      }
+      collectGuids(particleJson.root);
+
+      // Add each asset to zip
+      for (var guid of guids) {
+        if (!guid) continue;
+        var binPath = path.join(assetsDir, guid + '.bin');
+        var metaPath = path.join(assetsDir, guid + '.meta.json');
+        try {
+          await fs.promises.access(binPath);
+          var metaData = JSON.parse(await fs.promises.readFile(metaPath, 'utf-8').catch(function() { return '{}'; }));
+          var ext = metaData.type === 'texture' ? '.png' : metaData.type === 'shader' ? '.shader' : '.json';
+          var assetName = (metaData.name || guid) + ext;
+          zip.addLocalFile(binPath, 'assets', assetName);
+        } catch(e) {}
+        try {
+          await fs.promises.access(metaPath);
+          zip.addLocalFile(metaPath, 'assets', guid + '.meta.json');
+        } catch(e) {}
+      }
+    }
+
+    var zipBuffer = zip.toBuffer();
+    res.setHeader('Content-Disposition', 'attachment; filename="' + item.name + '.zip"');
+    res.setHeader('Content-Type', 'application/zip');
+    res.send(zipBuffer);
+  } catch (err) {
+    console.error('Download zip build error:', err);
+    res.status(500).json({ error: 'Failed to build download package' });
+  }
 });
 
 /**
@@ -359,7 +452,7 @@ router.get('/:id/thumbnail', async (req, res) => {
   }
 
   const ext = path.extname(item.thumbnailPath).toLowerCase();
-  const contentType = ext === '.png' ? 'image/png' : 'image/gif';
+  const contentType = ext === '.png' ? 'image/png' : ext === '.webm' ? 'video/webm' : ext === '.mp4' ? 'video/mp4' : 'image/gif';
   res.setHeader('Content-Type', contentType);
 
   const stream = fs.createReadStream(filePath);
@@ -395,28 +488,44 @@ router.get('/:id/particle-json', async (req, res) => {
   const item = await catalog.findItem(req.params.id);
   if (!item) return res.status(404).json({ error: 'VFX package not found' });
 
-  const zipPath = path.join(storage.getStorageRoot(), item.packagePath);
-  if (!await storage.fileExists(zipPath)) return res.status(404).json({ error: 'Package zip not found' });
+  const packageDir = storage.getPackageDir(item.category, item.name);
 
-  try {
-    const AdmZip = require('adm-zip');
-    const zip = new AdmZip(zipPath);
-    const entries = zip.getEntries();
-    var jsonEntry = null;
-    for (var i = 0; i < entries.length; i++) {
-      if (entries[i].entryName.endsWith('.particle.json')) {
-        jsonEntry = entries[i];
-        break;
-      }
-    }
-    if (!jsonEntry) return res.status(404).json({ error: 'No particle.json found in package' });
+  // Try standalone particle.json first (new flow)
+  const jsonFiles = await fs.promises.readdir(packageDir).catch(() => []);
+  var jsonFile = null;
+  for (var i = 0; i < jsonFiles.length; i++) {
+    if (jsonFiles[i].endsWith('.particle.json')) { jsonFile = jsonFiles[i]; break; }
+  }
 
+  if (jsonFile) {
     res.set('Content-Type', 'application/json');
     res.set('Access-Control-Allow-Origin', '*');
-    res.send(jsonEntry.getData());
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to read zip: ' + err.message });
+    var data = await fs.promises.readFile(path.join(packageDir, jsonFile));
+    return res.send(data);
   }
+
+  // Fallback: extract from zip (legacy)
+  if (item.packagePath) {
+    var zipPath = path.join(storage.getStorageRoot(), item.packagePath);
+    if (await storage.fileExists(zipPath)) {
+      try {
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(zipPath);
+        const entries = zip.getEntries();
+        for (var j = 0; j < entries.length; j++) {
+          if (entries[j].entryName.endsWith('.particle.json')) {
+            res.set('Content-Type', 'application/json');
+            res.set('Access-Control-Allow-Origin', '*');
+            return res.send(entries[j].getData());
+          }
+        }
+      } catch (err) {
+        return res.status(500).json({ error: 'Failed to read zip: ' + err.message });
+      }
+    }
+  }
+
+  res.status(404).json({ error: 'No particle.json found' });
 });
 
 /**
